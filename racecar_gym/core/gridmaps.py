@@ -16,6 +16,8 @@ class GridMap:
 
     def get_value(self, position: Position):
         px, py = self.to_pixel(position)
+        if px < 0 or px >= self._height or py < 0 or py >= self._width:
+            return None
         return self._map[px, py]
 
     def to_meter(self, px: int, py: int) -> Tuple[float, float]:
@@ -38,4 +40,3 @@ class GridMap:
     @property
     def resolution(self):
         return self._resolution
-
