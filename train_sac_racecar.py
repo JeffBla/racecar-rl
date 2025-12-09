@@ -14,7 +14,6 @@ Run:
 """
 
 import os
-import cv2
 from typing import Any, Dict, Tuple
 
 import gymnasium as gym
@@ -31,6 +30,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
 
 from Callback import CustomEvalCallback, LastReplayBufferCallback
+from racecar_utils import process_obs
 
 # ------------------------
 #  Env wrapper
@@ -85,15 +85,7 @@ class RaceCarWrapper(gym.Env):
         self._last_action = np.zeros(self.action_space.shape, dtype=np.float32)
 
     def _process_obs(self, obs: np.ndarray) -> np.ndarray:
-        """
-        RaceEnv returns uint8 0-255; convert to 1x96x96 uint8 grayscale.
-        """
-
-        obs = cv2.cvtColor(obs.transpose(1, 2, 0), cv2.COLOR_RGB2GRAY)
-        obs = cv2.resize(obs, (96, 96))
-        obs = obs.astype(np.uint8)
-        obs = np.expand_dims(obs, axis=0)  # (1,96,96)
-        return obs
+        return process_obs(obs)
 
     def reset(
         self,
@@ -269,7 +261,6 @@ def argparse():
                         type=float,
                         default=0.005,
                         help="Target network update rate.")
-
     parser.add_argument(
         "--scenario",
         type=str,
