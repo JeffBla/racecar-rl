@@ -3,22 +3,12 @@ Train SAC on racecar_gym for RL final project.
 
 Observation: 1 x 96 x 96 (uint8 in [0, 255])
 Action: Box([-1,-1], [1,1])
-- Uses:
-    - CnnPolicy (automatic CNN encoder)
-    - VecFrameStack for frame stacking
-    - RewardShapingWrapper for simple shaping
-    - Checkpoint + Eval callbacks
-
-Run:
-    python train_sac_racecar.py
 """
 
 import os
-from typing import Any, Dict, Tuple
+from typing import List
 
 import gymnasium as gym
-import numpy as np
-from racecar_gym.env import RaceEnv
 
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import (
@@ -29,169 +19,69 @@ from stable_baselines3.common.vec_env import (
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
 
+from EnvWrapper import MultiScenarioWrapper, RaceCarWrapper
 from Callback import CustomEvalCallback, LastReplayBufferCallback
-from racecar_utils import process_obs
 
-# ------------------------
-#  Env wrapper
-# ------------------------
+DEFAULT_MIXED_SCENARIOS = [
+    "circle_cw_competition_collisionStop",
+    "austria_competition_collisionStop",
+]
 
 
-class RaceCarWrapper(gym.Env):
-    """
-    Wrap racecar_gym RaceEnv to:
-      - enforce obs dtype/shape
-      - add simple reward shaping
+def parse_probabilities(prob_str: str | None,
+                        num_items: int) -> List[float] | None:
+    """Parse comma-separated probabilities; returns None if not provided."""
+    if prob_str is None:
+        return None
+    parts = [p.strip() for p in prob_str.split(",") if p.strip()]
+    if len(parts) != num_items:
+        raise ValueError(
+            f"Expected {num_items} probabilities, got {len(parts)}.")
+    return [float(p) for p in parts]
 
-    Observation: 3 x 128 x 128 (float32 in [0, 1])
-    Action: Box([-1,-1], [1,1])
-    """
 
-    metadata = {"render_modes": ["rgb_array_birds_eye"]}
-
-    def __init__(
-        self,
-        scenario: str,
-        reset_when_collision: bool,
-        max_eval_episode_steps: int | None = None,
-        is_random_start: bool = True,
-        is_eval: bool = False,
-    ):
-        super().__init__()
-
-        self._env = RaceEnv(
-            scenario=scenario,
-            render_mode="rgb_array_birds_eye",
-            reset_when_collision=reset_when_collision,
-        )
-
-        # expose action/obs spaces directly
-        self.action_space = self._env.action_space
-
-        # RaceEnv already returns (C,H,W) = (3, 96, 96) per spec
-        self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(1, 96, 96),
-            dtype=np.uint8,
-        )
-
-        self._max_eval_episode_steps = max_eval_episode_steps
-        self._step_count = 0
-        self._is_random_start = is_random_start
-        self._is_eval = is_eval
-
-        # will use last action for shaping
-        self._last_action = np.zeros(self.action_space.shape, dtype=np.float32)
-
-    def _process_obs(self, obs: np.ndarray) -> np.ndarray:
-        return process_obs(obs)
-
-    def reset(
-        self,
-        *,
-        seed: int | None = None,
-        options: dict | None = None,
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        if self._is_random_start:
-            if options is not None:
-                options['mode'] = 'random'
-            else:
-                options = {'mode': 'random'}
-        self._step_count = 0
-        self._last_action[:] = 0.0
-        obs, info = self._env.reset(seed=seed, options=options)
-        obs = self._process_obs(obs)
-        return obs, info
-
-    def step(
-        self, action: np.ndarray
-    ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """
-        Reward shaping 版本（使用 info）：
-
-            base_r = env reward (progress difference)
-
-            shaped_r = base_r
-                       + 0.5 * max(base_r, 0)       # 再補強一點前進進度
-                       + 20.0 * speed               # 鼓勵有速度，不要原地打轉
-                       - 0.01 * |steering|          # 緩和地懲罰過度轉向
-                       - 1.0  if collision          # 撞牆 / 撞車 penalty
-                       - 0.5  if wrong_way          # 反方向開 penalty
-        """
-        self._step_count += 1
-
-        obs, base_r, terminated, truncated, info = self._env.step(action)
-
-        # 從 info 抽出需要的欄位（用 get 避免沒有 key 時炸掉）
-        wall_collision = bool(info.get("wall_collision", False))
-        opponent_collisions = info.get("opponent_collisions", [])
-        collided = wall_collision or (len(opponent_collisions) > 0)
-
-        wrong_way = bool(info.get("wrong_way", False))
-        velocity = np.array(info.get("velocity", np.zeros(6,
-                                                          dtype=np.float32)),
-                            dtype=np.float32)
-
-        # 只取 x, y 兩個平面速度來算 speed（避免轉動角速度影響）
-        planar_speed = float(np.linalg.norm(velocity[:2]))
-
-        reward = float(base_r)
-
-        # 1) 補強「正向進度」
-        forward_progress = max(0.0, reward)
-        reward += 0.5 * forward_progress
-
-        # 2) 鼓勵有速度（scale 要和 base_r 同一個量級）
-        # 你貼的樣本裡速度很小（1e-4 等級），所以乘上 20 大概是 1e-3
-        reward += 20.0 * planar_speed
-
-        # 3) 懲罰過度轉向，但不要過大（避免車不敢轉彎）
-        steering_penalty = 0.01 * float(abs(action[1]))
-        reward -= steering_penalty
-
-        # 4) 碰撞 / 反向 penalty
-        if collided:
-            reward -= 1.0  # 撞牆 / 撞車，給一個明顯的負號 signal
-        if wrong_way:
-            reward -= 0.5  # 反方向開也扣分
-
-        # optional time limit truncation
-        if self._is_eval and self._max_eval_episode_steps is not None and self._step_count >= self._max_eval_episode_steps:
-            truncated = True
-
-        obs = self._process_obs(obs)
-        self._last_action = np.array(action, dtype=np.float32)
-
-        return obs, reward, terminated, truncated, info
-
-    def render(self):
-        return self._env.render()
-
-    def close(self):
-        self._env.close()
+def scenario_seconds(scenario: str, override_seconds: float | None) -> float:
+    """Return default episode seconds per scenario unless overridden."""
+    if override_seconds is not None:
+        return override_seconds
+    return 25.0 if "circle" in scenario else 100.0
 
 
 def make_env_fn(
-    scenario: str,
+    scenarios: list[str],
+    scenario_probs: list[float] | None,
     reset_when_collision: bool,
-    max_eval_episode_steps: int | None = None,
+    max_eval_episode_steps_by_scenario: dict[str, int],
     is_random_start: bool = True,
     is_eval: bool = False,
     seed: int = 0,
 ):
     """
-    Factory for DummyVecEnv.
+    Factory for DummyVecEnv supporting single or mixed scenarios.
     """
 
     def _init():
-        env = RaceCarWrapper(
-            scenario=scenario,
-            reset_when_collision=reset_when_collision,
-            max_eval_episode_steps=max_eval_episode_steps,
-            is_random_start=is_random_start,
-            is_eval=is_eval,
-        )
+        if len(scenarios) == 1:
+            scenario = scenarios[0]
+            env = RaceCarWrapper(
+                scenario=scenario,
+                reset_when_collision=reset_when_collision,
+                max_eval_episode_steps=max_eval_episode_steps_by_scenario.get(
+                    scenario),
+                is_random_start=is_random_start,
+                is_eval=is_eval,
+            )
+        else:
+            env = MultiScenarioWrapper(
+                scenarios=scenarios,
+                scenario_probs=scenario_probs,
+                reset_when_collision=reset_when_collision,
+                max_eval_episode_steps_by_scenario=
+                max_eval_episode_steps_by_scenario,
+                is_random_start=is_random_start,
+                is_eval=is_eval,
+                seed=seed,
+            )
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.reset(seed=seed)
         return env
@@ -272,6 +162,17 @@ def argparse():
         help="RaceEnv scenario to train on.",
     )
     parser.add_argument(
+        "--use_mixed_scenarios",
+        action="store_true",
+        help="Sample both circle and austria scenarios on reset.",
+    )
+    parser.add_argument(
+        "--scenario_probs",
+        type=str,
+        default=None,
+        help="Comma-separated sampling probabilities (only when mixing).",
+    )
+    parser.add_argument(
         "--eval_episode_seconds",
         type=float,
         default=None,
@@ -299,22 +200,29 @@ def main():
     os.makedirs(models_dir, exist_ok=True)
 
     # ==== env config ====
-    # default episode length: 25s for circle, 100s for Austria (env spec)
-    # 0.02 sec per frame  ->  steps = seconds / 0.02 :contentReference[oaicite:1]{index=1}
-    if args.eval_episode_seconds is None:
-        if "circle" in args.scenario:
-            eval_episode_seconds = 25.0
-        else:  # austria
-            eval_episode_seconds = 100.0
-    else:
-        eval_episode_seconds = args.eval_episode_seconds
+    scenarios = (DEFAULT_MIXED_SCENARIOS
+                 if args.use_mixed_scenarios else [args.scenario])
+    scenario_probs = (parse_probabilities(args.scenario_probs, len(scenarios))
+                      if args.use_mixed_scenarios else None)
 
-    max_eval_episode_steps = int(eval_episode_seconds / 0.02)
+    # default episode length: 25s for circle, 100s for Austria (env spec)
+    # 0.02 sec per frame  ->  steps = seconds / 0.02
+    max_eval_episode_steps_by_scenario = {
+        scenario:
+        int(scenario_seconds(scenario, args.eval_episode_seconds) / 0.02)
+        for scenario in scenarios
+    }
 
     # for *_competition_collisionStop we want reset_when_collision = False
-    # (for plain austria_competition/circle_cw you must keep True) :contentReference[oaicite:2]{index=2}
-    reset_when_collision = not args.scenario.endswith(
+    # (for plain austria_competition/circle_cw you must keep True)
+    reset_when_collision = not scenarios[0].endswith(
         "_competition_collisionStop")
+    for scenario in scenarios[1:]:
+        if scenario.endswith("_competition_collisionStop") != scenarios[
+                0].endswith("_competition_collisionStop"):
+            raise ValueError(
+                "Mixed scenarios with conflicting reset_when_collision flags are not supported."
+            )
 
     num_envs = args.num_envs
     frame_stack = args.frame_stack
@@ -322,9 +230,11 @@ def main():
     # ==== make vec env ====
     env_fns = [
         make_env_fn(
-            scenario=args.scenario,
+            scenarios=scenarios,
+            scenario_probs=scenario_probs,
             reset_when_collision=reset_when_collision,
-            max_eval_episode_steps=max_eval_episode_steps,
+            max_eval_episode_steps_by_scenario=
+            max_eval_episode_steps_by_scenario,
             is_random_start=True,
             seed=100 + i,
         ) for i in range(num_envs)
@@ -338,9 +248,10 @@ def main():
 
     # ==== eval env (single) ====
     eval_env_fn = make_env_fn(
-        scenario=args.scenario,
+        scenarios=scenarios,
+        scenario_probs=scenario_probs,
         reset_when_collision=reset_when_collision,
-        max_eval_episode_steps=max_eval_episode_steps,
+        max_eval_episode_steps_by_scenario=max_eval_episode_steps_by_scenario,
         is_random_start=False,
         is_eval=True,
         seed=999,
