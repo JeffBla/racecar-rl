@@ -34,8 +34,6 @@ class MaximizeProgressTask(Task):
 
     def done(self, agent_id, state) -> bool:
         agent_state = state[agent_id]
-        if agent_state.get('off_track', False):
-            return True
         if self._terminate_on_collision and self._check_collision(agent_state):
             return True
         return agent_state['lap'] > self._laps or self._time_limit < agent_state['time']
@@ -43,7 +41,6 @@ class MaximizeProgressTask(Task):
     def _check_collision(self, agent_state):
         safe_margin = 0.25
         collision = agent_state['wall_collision'] or len(agent_state['opponent_collisions']) > 0
-        collision = collision or agent_state.get('off_track', False)
         if 'observations' in agent_state and 'lidar' in agent_state['observations']:
             n_min_rays = sum(np.where(agent_state['observations']['lidar'] <= safe_margin, 1, 0))
             return n_min_rays > self._n_min_rays_termination or collision
@@ -135,8 +132,6 @@ class MaximizeProgressTask(Task):
 
     def done(self, agent_id, state) -> bool:
         agent_state = state[agent_id]
-        if agent_state.get('off_track', False):
-            return True
         if self._terminate_on_collision and self._check_collision(agent_state):
             return True
         return agent_state['lap'] > self._laps or self._time_limit < agent_state['time']
@@ -144,7 +139,6 @@ class MaximizeProgressTask(Task):
     def _check_collision(self, agent_state):
         safe_margin = 0.25
         collision = agent_state['wall_collision'] or len(agent_state['opponent_collisions']) > 0
-        collision = collision or agent_state.get('off_track', False)
         if 'observations' in agent_state and 'lidar' in agent_state['observations']:
             n_min_rays = sum(np.where(agent_state['observations']['lidar'] <= safe_margin, 1, 0))
             return n_min_rays > self._n_min_rays_termination or collision
@@ -193,8 +187,6 @@ class MaximizeProgressTaskCollisionInfluenceTimeLimit(Task):
 
     def done(self, agent_id, state) -> bool:
         agent_state = state[agent_id]
-        if agent_state.get('off_track', False):
-            return True
         if self._terminate_on_collision and self._check_collision(agent_state):
             return True
         # Collision reduce the time limit
@@ -206,7 +198,6 @@ class MaximizeProgressTaskCollisionInfluenceTimeLimit(Task):
     def _check_collision(self, agent_state):
         safe_margin = 0.25
         collision = agent_state['wall_collision'] or len(agent_state['opponent_collisions']) > 0
-        collision = collision or agent_state.get('off_track', False)
         if 'observations' in agent_state and 'lidar' in agent_state['observations']:
             n_min_rays = sum(np.where(agent_state['observations']['lidar'] <= safe_margin, 1, 0))
             return n_min_rays > self._n_min_rays_termination or collision

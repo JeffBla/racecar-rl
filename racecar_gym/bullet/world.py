@@ -185,13 +185,6 @@ class World(world.World):
         dist_obstacle = obstacle_map.get_value(position=(pose[0], pose[1], 0))
         dist_goal = dist_goal_map.get_value(position=(pose[0], pose[1], 0))
 
-        off_track = progress is None or dist_obstacle is None or dist_goal is None
-        self._state[agent.id]['off_track'] = off_track
-        if off_track:
-            progress = 0.0 if progress is None else progress
-            dist_obstacle = 0.0 if dist_obstacle is None else dist_obstacle
-            dist_goal = 0.0 if dist_goal is None else dist_goal
-
         self._state[agent.id]['velocity'] = velocity
         self._state[agent.id]['progress'] = progress
         self._state[agent.id]['obstacle'] = dist_obstacle
