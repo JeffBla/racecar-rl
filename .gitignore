@@ -3,3 +3,5 @@ build/
 __pycache__/
 .vscode/
 runs/
+results
+rl_model.zip
