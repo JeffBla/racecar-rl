@@ -89,7 +89,6 @@ class RaceCarWrapper(gym.Env):
             shaped_r = base_r
                        + 0.5 * max(base_r, 0)       # 再補強一點前進進度
                        + 20.0 * speed               # 鼓勵有速度，不要原地打轉
-                       - 0.01 * |steering|          # 緩和地懲罰過度轉向
                        - 1.0  if collision          # 撞牆 / 撞車 penalty
                        - 0.5  if wrong_way          # 反方向開 penalty
         """
@@ -119,10 +118,6 @@ class RaceCarWrapper(gym.Env):
         # 2) 鼓勵有速度（scale 要和 base_r 同一個量級）
         # 你貼的樣本裡速度很小（1e-4 等級），所以乘上 20 大概是 1e-3
         reward += 20.0 * planar_speed
-
-        # 3) 懲罰過度轉向，但不要過大（避免車不敢轉彎）
-        steering_penalty = 0.01 * float(abs(action[1]))
-        reward -= steering_penalty
 
         # 4) 碰撞 / 反向 penalty
         if collided:

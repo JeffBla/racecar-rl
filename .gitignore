@@ -4,4 +4,5 @@ __pycache__/
 .vscode/
 runs/
 results
+results_test
 rl_model.zip
