@@ -21,6 +21,7 @@ from stable_baselines3.common.logger import configure
 
 from EnvWrapper import MultiScenarioWrapper, RaceCarWrapper
 from Callback import CustomEvalCallback, LastReplayBufferCallback
+from racecar_models import RaceCarMiniVGG
 
 DEFAULT_MIXED_SCENARIOS = [
     "circle_cw_competition_collisionStop",
@@ -152,6 +153,17 @@ def argparse():
                         default=0.005,
                         help="Target network update rate.")
     parser.add_argument(
+        "--encoder",
+        type=str,
+        default="sb3_cnn",
+        choices=["sb3_cnn", "racecar_minivgg"],
+        help="Pixel encoder to use inside SAC policy.",
+    )
+    parser.add_argument("--encoder_features_dim",
+                        type=int,
+                        default=256,
+                        help="Latent dim for the lightweight encoder.")
+    parser.add_argument(
         "--scenario",
         type=str,
         default="circle_cw_competition_collisionStop",
@@ -226,6 +238,13 @@ def main():
 
     num_envs = args.num_envs
     frame_stack = args.frame_stack
+    policy_kwargs = dict(normalize_images=True)
+    if args.encoder == "racecar_minivgg":
+        policy_kwargs.update(
+            features_extractor_class=RaceCarMiniVGG,
+            features_extractor_kwargs=dict(
+                features_dim=args.encoder_features_dim),
+        )
 
     # ==== make vec env ====
     env_fns = [
@@ -276,7 +295,7 @@ def main():
         model = SAC(
             policy="CnnPolicy",
             env=vec_env,
-            policy_kwargs=dict(normalize_images=True, ),
+            policy_kwargs=policy_kwargs,
             verbose=1,
             tensorboard_log=log_dir,
             # 這些是 reasonable default，你之後可以微調
